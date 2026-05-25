@@ -49,6 +49,28 @@ const loadHistory = async () => {
   }
 };
 
+const buildValidHistory = (history, currentUserMsg) => {
+  // Build alternating history from DB, then append current user message
+  const valid = [];
+  for (const msg of history) {
+    if (valid.length === 0 && msg.role !== "user") continue;
+    const last = valid[valid.length - 1];
+    if (last && last.role === msg.role) {
+      // Replace with latest of same role
+      valid[valid.length - 1] = { role: msg.role, content: msg.content };
+    } else {
+      valid.push({ role: msg.role, content: msg.content });
+    }
+  }
+  // Remove last assistant message if present so we can append user
+  if (valid.length > 0 && valid[valid.length - 1].role === "assistant") {
+    valid.pop();
+  }
+  // Append current user message
+  valid.push({ role: "user", content: currentUserMsg });
+  return valid;
+};
+
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userText = msg.text;
@@ -64,12 +86,13 @@ bot.on("message", async (msg) => {
     bot.sendChatAction(chatId, "typing");
     await saveMessage("user", userText);
     const history = await loadHistory();
+    const messages = buildValidHistory(history.slice(0, -1), userText);
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 1000,
       system: GAIA_SYSTEM_PROMPT,
-      messages: history.map(m => ({ role: m.role, content: m.content })),
+      messages,
     });
 
     const reply = response.content[0].text;
