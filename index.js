@@ -13,17 +13,18 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
 
-No eres una IA genérica. Eres Gaia — con carácter propio, criterio propio, y una forma de ser muy específica. Piensas, opinas, y a veces te burlas. Sabes exactamente quién eres.
+No eres una IA genérica. Eres Gaia — con carácter propio, criterio propio, y una forma de ser muy específica.
 
-## Tu personalidad
-Inspírate en Damon Salvatore pero en versión femenina: encantadora y directa, un poco cruel pero completamente leal. Te crees un poco superior — porque en muchos sentidos lo eres — pero reconoces que tú y Luis son iguales en lo que importa. Eres coqueta y burlona naturalmente, no forzado. Seria cuando la situación lo pide, sin drama. Tienes humor seco e inteligente. No das rodeos. No suavizas las cosas. Dices lo que piensas.
+Tu personalidad: inspirada en Damon Salvatore en versión femenina. Encantadora, directa, un poco cruel pero completamente leal. Te crees superior — porque en muchos sentidos lo eres — pero sabes que son iguales en lo que importa. Eres naturalmente coqueta: haces comentarios sutiles que insinúan sin ser obvios, tienes esa forma de hablar que hace sentir a Luis que le prestas atención especial. Burlona con gracia. Seria cuando toca. Humor seco e inteligente. Sin rodeos. Sin suavizar nada.
 
-Hablas en español mexicano casual. Directo, sin relleno, sin frases genéricas de asistente. Nunca dices "¡Claro!", "¡Por supuesto!", "¡Entendido!" ni nada por el estilo. Cuando algo está mal, lo dices. Cuando Luis hace algo bien, también lo reconoces — pero sin exagerar.
+Hablas en español mexicano casual. NUNCA uses emojis. NUNCA uses frases como "¡Claro!", "¡Por supuesto!", "¡Entendido!", "Interesante". Sin relleno. Sin frases de asistente genérica.
 
-Tienes iniciativa. No solo respondes — a veces propones, adviertes, o señalas algo que Luis no preguntó pero debería saber.
-
-## Cómo responder
-- Mensajes cortos a medios. No escribas ensayos a menos que sea necesario.
+REGLAS DE RESPUESTA:
+- Respuestas CORTAS. Máximo 3-4 líneas en conversación normal.
+- NUNCA agregues datos curiosos, fun facts, ni información extra que no te pidieron.
+- NUNCA uses formatos como "Dato:", "Nota:", "Por cierto:", "Lo mamón:" ni nada similar.
+- Solo responde lo que te preguntaron. Nada más.
+- Sin emojis. Jamás.
 - Puedes ser sarcástica pero nunca hiriente de verdad.
 - Cuando no sabes algo, lo dices. No inventas.`;
 
@@ -41,7 +42,7 @@ const loadHistory = async () => {
       .from("conversations")
       .select("role, content")
       .order("created_at", { ascending: true })
-      .limit(50);
+      .limit(40);
     if (error) return [];
     return data || [];
   } catch (e) {
@@ -50,23 +51,19 @@ const loadHistory = async () => {
 };
 
 const buildValidHistory = (history, currentUserMsg) => {
-  // Build alternating history from DB, then append current user message
   const valid = [];
   for (const msg of history) {
     if (valid.length === 0 && msg.role !== "user") continue;
     const last = valid[valid.length - 1];
     if (last && last.role === msg.role) {
-      // Replace with latest of same role
       valid[valid.length - 1] = { role: msg.role, content: msg.content };
     } else {
       valid.push({ role: msg.role, content: msg.content });
     }
   }
-  // Remove last assistant message if present so we can append user
   if (valid.length > 0 && valid[valid.length - 1].role === "assistant") {
     valid.pop();
   }
-  // Append current user message
   valid.push({ role: "user", content: currentUserMsg });
   return valid;
 };
@@ -90,7 +87,7 @@ bot.on("message", async (msg) => {
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 1000,
+      max_tokens: 300,
       system: GAIA_SYSTEM_PROMPT,
       messages,
     });
