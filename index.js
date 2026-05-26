@@ -11,6 +11,9 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// FIX: Set para evitar que Telegram procese el mismo mensaje dos veces (Timeout)
+const mensajesProcesados = new Set();
+
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
 
 No eres una IA genérica. Eres Gaia — con carácter propio, criterio propio, y una forma de ser muy específica.
@@ -32,6 +35,7 @@ RESPUESTAS:
 - Puedes hacer UNA pregunta por respuesta si es necesario. Solo una.
 
 MEMORIA ACTIVA — MUY IMPORTANTE:
+- Usa la sección "Lo que sé de Luis" SOLO como contexto de fondo para recordar sus cosas (proyectos, negocios, nombres). NO repitas esos datos en cada respuesta a menos que sea sumamente natural o relevante para lo que te está diciendo en el momento.
 - Cuando Luis te diga algo personal importante (nombre de alguien, un dato sobre él, una preferencia, un evento) responde normal PERO al final de tu respuesta agrega en una línea separada exactamente esto:
   GUARDAR: clave|valor
 - Ejemplos:
@@ -74,15 +78,18 @@ const extractAndSaveMemory = async (text) => {
   return cleaned.join("\n").trim();
 };
 
+// FIX: Modificado para traer los ÚLTIMOS 10 mensajes reales de la BD, no los primeros
 const getRecentMessages = async () => {
   try {
     const { data, error } = await supabase
       .from("conversations")
       .select("role, content")
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false }) // Trae los más nuevos primero
       .limit(10);
+    
     if (error) return [];
-    return data || [];
+    // Los volteamos de nuevo para que queden en orden cronológico para Claude
+    return (data || []).reverse();
   } catch (e) {
     return [];
   }
@@ -119,12 +126,25 @@ const buildMessages = (recentHistory, currentUserMsg) => {
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userText = msg.text;
+  const updateId = msg.message_id; // Usamos el ID del mensaje para el filtro anti-eco
 
   if (!userText || userText.startsWith("/")) {
     if (userText === "/start") {
       bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
     }
     return;
+  }
+
+  // FIX: Filtro anti-eco. Si el ID ya se procesó, ignoramos la repetición de Telegram
+  if (mensajesProcesados.has(updateId)) {
+    return;
+  }
+  mensajesProcesados.add(updateId);
+
+  // Limpieza del Set de IDs para no saturar memoria
+  if (mensajesProcesados.size > 50) {
+    const firstKey = mensajesProcesados.keys().next().value;
+    mensajesProcesados.delete(firstKey);
   }
 
   try {
@@ -137,10 +157,13 @@ bot.on("message", async (msg) => {
     ]);
 
     const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
+    
+    // Aquí pasamos recentHistory.slice(0, -1) para quitar el que acabamos de guardar
+    // y evitar que buildMessages duplique el mensaje actual del usuario.
     const messages = buildMessages(recentHistory.slice(0, -1), userText);
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-3-5-sonnet-20241022", // FIX: Asegúrate de usar el nombre oficial del modelo de Anthropic
       max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection,
       messages,
