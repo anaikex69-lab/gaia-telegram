@@ -47,10 +47,10 @@ const getRecentMessages = async () => {
     const { data, error } = await supabase
       .from("conversations")
       .select("role, content")
-      .order("created_at", { ascending: false })
-      .limit(10);
+      .order("created_at", { ascending: true })
+      .limit(8);
     if (error) return [];
-    return (data || []).reverse();
+    return data || [];
   } catch (e) {
     return [];
   }
