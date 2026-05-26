@@ -151,19 +151,17 @@ bot.on("message", async (msg) => {
     bot.sendChatAction(chatId, "typing");
     await saveMessage("user", userText);
 
-    const [recentHistory, profile] = await Promise.all([
+const [recentHistory, profile] = await Promise.all([
       getRecentMessages(),
       getProfile()
     ]);
 
     const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
     
-    // Aquí pasamos recentHistory.slice(0, -1) para quitar el que acabamos de guardar
-    // y evitar que buildMessages duplique el mensaje actual del usuario.
-    const messages = buildMessages(recentHistory.slice(0, -1), userText);
-
-    const response = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-20241022", // FIX: Asegúrate de usar el nombre oficial del modelo de Anthropic
+    const messages = buildMessages(recentHistory, userText);
+    
+const response = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-latest", 
       max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection,
       messages,
