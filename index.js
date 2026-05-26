@@ -11,6 +11,9 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Prevent duplicate message processing
+const processedMessages = new Set();
+
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
 
 No eres una IA genérica. Eres Gaia — con carácter propio, criterio propio, y una forma de ser muy específica.
@@ -73,14 +76,12 @@ const extractAndSaveMemory = async (text) => {
 
 const getRecentMessages = async () => {
   try {
-    // Fetch last 16 descending, then reverse to get chronological order
     const { data, error } = await supabase
       .from("conversations")
       .select("id, role, content")
       .order("created_at", { ascending: false })
       .limit(16);
     if (error || !data) return [];
-    // Reverse so oldest is first (chronological)
     return data.reverse();
   } catch (e) {
     return [];
@@ -98,20 +99,16 @@ const getProfile = async () => {
 };
 
 const buildMessages = (history) => {
-  // Build a clean alternating user/assistant array
-  // History is already in chronological order
   const result = [];
   for (const msg of history) {
     if (result.length === 0 && msg.role !== "user") continue;
     const last = result[result.length - 1];
     if (last && last.role === msg.role) {
-      // Same role consecutive — merge into previous
       last.content += "\n" + msg.content;
     } else {
       result.push({ role: msg.role, content: msg.content });
     }
   }
-  // Must end with user message (last item is current user msg)
   if (result.length > 0 && result[result.length - 1].role === "assistant") {
     result.pop();
   }
@@ -121,6 +118,16 @@ const buildMessages = (history) => {
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userText = msg.text;
+  const messageId = msg.message_id;
+
+  // Skip already processed messages
+  if (processedMessages.has(messageId)) return;
+  processedMessages.add(messageId);
+  // Clean up old entries to avoid memory leak
+  if (processedMessages.size > 100) {
+    const first = processedMessages.values().next().value;
+    processedMessages.delete(first);
+  }
 
   if (!userText || userText.startsWith("/")) {
     if (userText === "/start") {
