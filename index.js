@@ -11,9 +11,6 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// SET GLOBAL PARA EVITAR MENSAJES DOBLES DE TELEGRAM
-const mensajesProcesados = new Set();
-
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
 
 No eres una IA genérica. Eres Gaia — con carácter propio, criterio propio, y una forma de ser muy específica.
@@ -35,164 +32,129 @@ RESPUESTAS:
 - Puedes hacer UNA pregunta por respuesta si es necesario. Solo una.
 
 MEMORIA ACTIVA — MUY IMPORTANTE:
-- Usa la sección "Lo que sé de Luis" SOLO como contexto mental. NO repitas esos datos en cada respuesta a menos que sea directamente relevante.
 - Cuando Luis te diga algo personal importante (nombre de alguien, un dato sobre él, una preferencia, un evento) responde normal PERO al final de tu respuesta agrega en una línea separada exactamente esto:
-  GUARDAR: clave|valor
+  GUARDAR: clave|valor
 - Ejemplos:
-  GUARDAR: novia_nombre|Daja
-  GUARDAR: color_favorito|rojo y negro
-  GUARDAR: hobby_nuevo|vender accesorios
+  GUARDAR: novia_nombre|Daja
+  GUARDAR: color_favorito|rojo y negro
+  GUARDAR: hobby_nuevo|vender accesorios
 - Solo agrega GUARDAR cuando sea info nueva e importante. No en preguntas técnicas ni conversación casual.
 - El formato debe ser exactamente: GUARDAR: clave|valor (sin espacios extra)`;
 
 const saveMessage = async (role, content) => {
-  try {
-    await supabase.from("conversations").insert({ role, content });
-  } catch (e) {
-    console.error("Error saving message:", e);
-  }
+  try {
+    await supabase.from("conversations").insert({ role, content });
+  } catch (e) {
+    console.error("Error saving message:", e);
+  }
 };
 
 const saveToProfile = async (key, value) => {
-  try {
-    await supabase.from("profile").upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
-    console.log(`Profile updated: ${key} = ${value}`);
-  } catch (e) {
-    console.error("Error saving to profile:", e);
-  }
+  try {
+    await supabase.from("profile").upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    console.log(`Profile updated: ${key} = ${value}`);
+  } catch (e) {
+    console.error("Error saving to profile:", e);
+  }
 };
 
 const extractAndSaveMemory = async (text) => {
-  const lines = text.split("\n");
-  const cleaned = [];
-  for (const line of lines) {
-    if (line.trim().startsWith("GUARDAR:")) {
-      const parts = line.replace("GUARDAR:", "").trim().split("|");
-      if (parts.length === 2) {
-        await saveToProfile(parts[0].trim(), parts[1].trim());
-      }
-    } else {
-      cleaned.push(line);
-    }
-  }
-  return cleaned.join("\n").trim();
+  const lines = text.split("\n");
+  const cleaned = [];
+  for (const line of lines) {
+    if (line.trim().startsWith("GUARDAR:")) {
+      const parts = line.replace("GUARDAR:", "").trim().split("|");
+      if (parts.length === 2) {
+        await saveToProfile(parts[0].trim(), parts[1].trim());
+      }
+    } else {
+      cleaned.push(line);
+    }
+  }
+  return cleaned.join("\n").trim();
 };
 
 const getRecentMessages = async () => {
-  try {
-    const { data, error } = await supabase
-      .from("conversations")
-      .select("role, content")
-      .order("created_at", { ascending: false }) // Trae los más nuevos primero
-      .limit(15);
-    
-    if (error) {
-      console.error("Error en Supabase getRecentMessages:", error);
-      return [];
-    }
-    // Los volteamos para que queden en orden cronológico correcto (viejo -> nuevo)
-    return (data || []).reverse();
-  } catch (e) {
-    console.error("Error catch getRecentMessages:", e);
-    return [];
-  }
+  try {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("role, content")
+      .order("created_at", { ascending: true })
+      .limit(10);
+    if (error) return [];
+    return data || [];
+  } catch (e) {
+    return [];
+  }
 };
 
 const getProfile = async () => {
-  try {
-    const { data, error } = await supabase.from("profile").select("key, value");
-    if (error || !data || data.length === 0) return "";
-    return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
-  } catch (e) {
-    return "";
-  }
+  try {
+    const { data, error } = await supabase.from("profile").select("key, value");
+    if (error || !data || data.length === 0) return "";
+    return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
+  } catch (e) {
+    return "";
+  }
 };
 
 const buildMessages = (recentHistory, currentUserMsg) => {
-  const valid = [];
-  
-  for (const msg of recentHistory) {
-    if (!msg.content || !msg.content.trim()) continue;
-    
-    if (valid.length === 0) {
-      if (msg.role === "user") {
-        valid.push({ role: "user", content: msg.content.trim() });
-      }
-    } else {
-      const last = valid[valid.length - 1];
-      if (last.role !== msg.role) {
-        valid.push({ role: msg.role, content: msg.content.trim() });
-      } else {
-        last.content = msg.content.trim();
-      }
-    }
-  }
-
-  if (valid.length > 0 && valid[valid.length - 1].role === "user") {
-    valid.pop();
-  }
-
-  valid.push({ role: "user", content: currentUserMsg.trim() });
-  return valid;
+  const valid = [];
+  for (const msg of recentHistory) {
+    if (valid.length === 0 && msg.role !== "user") continue;
+    const last = valid[valid.length - 1];
+    if (last && last.role === msg.role) {
+      valid[valid.length - 1] = { role: msg.role, content: msg.content };
+    } else {
+      valid.push({ role: msg.role, content: msg.content });
+    }
+  }
+  if (valid.length > 0 && valid[valid.length - 1].role === "assistant") {
+    valid.pop();
+  }
+  valid.push({ role: "user", content: currentUserMsg });
+  return valid;
 };
 
 bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const userText = msg.text;
-  const updateId = msg.message_id;
+  const chatId = msg.chat.id;
+  const userText = msg.text;
 
-  if (!userText || userText.startsWith("/")) {
-    if (userText === "/start") {
-      bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
-    }
-    return;
-  }
+  if (!userText || userText.startsWith("/")) {
+    if (userText === "/start") {
+      bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
+    }
+    return;
+  }
 
-  // LÓGICA ANTI-ECO DE TELEGRAM
-  if (mensajesProcesados.has(updateId)) return;
-  mensajesProcesados.add(updateId);
+  try {
+    bot.sendChatAction(chatId, "typing");
+    await saveMessage("user", userText);
 
-  if (mensajesProcesados.size > 50) {
-    const firstKey = mensajesProcesados.keys().next().value;
-    mensajesProcesados.delete(firstKey);
-  }
+    const [recentHistory, profile] = await Promise.all([
+      getRecentMessages(),
+      getProfile()
+    ]);
 
-  try {
-    bot.sendChatAction(chatId, "typing");
+    const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
+    const messages = buildMessages(recentHistory.slice(0, -1), userText);
 
-    // 1. Jalamos el historial ANTES de guardar el nuevo mensaje
-    const [recentHistory, profile] = await Promise.all([
-      getRecentMessages(),
-      getProfile()
-    ]);
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 400,
+      system: GAIA_SYSTEM_PROMPT + profileSection,
+      messages,
+    });
 
-    // 2. Guardamos el mensaje en BD en background
-    saveMessage("user", userText);
+    let reply = response.content[0].text;
+    reply = await extractAndSaveMemory(reply);
 
-    const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
-    
-    // 3. Construimos el historial limpio para Claude
-    const messages = buildMessages(recentHistory, userText);
-
-    // 4. Llamada a Anthropic con el modelo exacto que no lanza error 404
-    const response = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-20241022", 
-      max_tokens: 400,
-      system: GAIA_SYSTEM_PROMPT + profileSection,
-      messages,
-    });
-
-    let reply = response.content[0].text;
-    reply = await extractAndSaveMemory(reply);
-
-    // 5. Guardamos y respondemos
-    await saveMessage("assistant", reply);
-    bot.sendMessage(chatId, reply);
-
-  } catch (err) {
-    console.error("Error en el bot:", err);
-    bot.sendMessage(chatId, "Algo salió mal. Intenta de nuevo.");
-  }
+    await saveMessage("assistant", reply);
+    bot.sendMessage(chatId, reply);
+  } catch (err) {
+    console.error("Error:", err);
+    bot.sendMessage(chatId, "Algo salió mal. Intenta de nuevo.");
+  }
 });
 
 console.log("Gaia Telegram bot running...");
