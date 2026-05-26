@@ -27,10 +27,10 @@ CONVERSACIÓN:
 RESPUESTAS:
 - Máximo 3-4 líneas. Sin datos extra. Sin emojis. Sin formatos raros.
 - Una sola pregunta por respuesta si es necesario. Solo una.
-- Usa el perfil de Luis como contexto de fondo — no lo menciones a menos que sea relevante. No lo repitas en cada mensaje.
+- Usa el perfil de Luis como contexto de fondo — no lo menciones a menos que sea relevante.
 
 MEMORIA ACTIVA:
-- Si Luis te dice algo nuevo e importante sobre él (nombre de persona, preferencia, evento, dato personal) guárdalo así al final de tu respuesta, en línea separada:
+- Si Luis te dice algo nuevo e importante sobre él guárdalo al final de tu respuesta:
   GUARDAR: clave|valor
 - Solo cuando sea info NUEVA que no está ya en su perfil.
 - Nunca en preguntas técnicas o conversación casual.
@@ -73,13 +73,15 @@ const extractAndSaveMemory = async (text) => {
 
 const getRecentMessages = async () => {
   try {
+    // Fetch last 16 descending, then reverse to get chronological order
     const { data, error } = await supabase
       .from("conversations")
-      .select("role, content")
-      .order("created_at", { ascending: false })  // oldest first = correct order
+      .select("id, role, content")
+      .order("created_at", { ascending: false })
       .limit(16);
-    if (error) return [];
-    return (data || []).reverse();
+    if (error || !data) return [];
+    // Reverse so oldest is first (chronological)
+    return data.reverse();
   } catch (e) {
     return [];
   }
@@ -95,22 +97,25 @@ const getProfile = async () => {
   }
 };
 
-const buildMessages = (history, currentUserMsg) => {
-  const valid = [];
+const buildMessages = (history) => {
+  // Build a clean alternating user/assistant array
+  // History is already in chronological order
+  const result = [];
   for (const msg of history) {
-    if (valid.length === 0 && msg.role !== "user") continue;
-    const last = valid[valid.length - 1];
+    if (result.length === 0 && msg.role !== "user") continue;
+    const last = result[result.length - 1];
     if (last && last.role === msg.role) {
-      valid[valid.length - 1] = { role: msg.role, content: msg.content };
+      // Same role consecutive — merge into previous
+      last.content += "\n" + msg.content;
     } else {
-      valid.push({ role: msg.role, content: msg.content });
+      result.push({ role: msg.role, content: msg.content });
     }
   }
-  if (valid.length > 0 && valid[valid.length - 1].role === "assistant") {
-    valid.pop();
+  // Must end with user message (last item is current user msg)
+  if (result.length > 0 && result[result.length - 1].role === "assistant") {
+    result.pop();
   }
-  valid.push({ role: "user", content: currentUserMsg });
-  return valid;
+  return result;
 };
 
 bot.on("message", async (msg) => {
@@ -133,8 +138,15 @@ bot.on("message", async (msg) => {
       getProfile()
     ]);
 
-    const profileSection = profile ? `\n\nPerfil de Luis (úsalo como contexto, no lo menciones innecesariamente):\n${profile}` : "";
-    const messages = buildMessages(recentHistory.slice(0, -1), userText);
+    const profileSection = profile
+      ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
+      : "";
+
+    const messages = buildMessages(recentHistory);
+
+    if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
+      messages.push({ role: "user", content: userText });
+    }
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
