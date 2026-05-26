@@ -11,7 +11,7 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// FIX: Set para evitar que Telegram procese el mismo mensaje dos veces (Timeout)
+// SET GLOBAL PARA EVITAR MENSAJES DOBLES DE TELEGRAM
 const mensajesProcesados = new Set();
 
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
@@ -35,7 +35,7 @@ RESPUESTAS:
 - Puedes hacer UNA pregunta por respuesta si es necesario. Solo una.
 
 MEMORIA ACTIVA — MUY IMPORTANTE:
-- Usa la sección "Lo que sé de Luis" SOLO como contexto de fondo para recordar sus cosas (proyectos, negocios, nombres). NO repitas esos datos en cada respuesta a menos que sea sumamente natural o relevante para lo que te está diciendo en el momento.
+- Usa la sección "Lo que sé de Luis" SOLO como contexto mental. NO repitas esos datos en cada respuesta a menos que sea directamente relevante.
 - Cuando Luis te diga algo personal importante (nombre de alguien, un dato sobre él, una preferencia, un evento) responde normal PERO al final de tu respuesta agrega en una línea separada exactamente esto:
   GUARDAR: clave|valor
 - Ejemplos:
@@ -78,19 +78,22 @@ const extractAndSaveMemory = async (text) => {
   return cleaned.join("\n").trim();
 };
 
-// FIX: Modificado para traer los ÚLTIMOS 10 mensajes reales de la BD, no los primeros
 const getRecentMessages = async () => {
   try {
     const { data, error } = await supabase
       .from("conversations")
       .select("role, content")
       .order("created_at", { ascending: false }) // Trae los más nuevos primero
-      .limit(10);
+      .limit(15);
     
-    if (error) return [];
-    // Los volteamos de nuevo para que queden en orden cronológico para Claude
+    if (error) {
+      console.error("Error en Supabase getRecentMessages:", error);
+      return [];
+    }
+    // Los volteamos para que queden en orden cronológico correcto (viejo -> nuevo)
     return (data || []).reverse();
   } catch (e) {
+    console.error("Error catch getRecentMessages:", e);
     return [];
   }
 };
@@ -107,26 +110,36 @@ const getProfile = async () => {
 
 const buildMessages = (recentHistory, currentUserMsg) => {
   const valid = [];
+  
   for (const msg of recentHistory) {
-    if (valid.length === 0 && msg.role !== "user") continue;
-    const last = valid[valid.length - 1];
-    if (last && last.role === msg.role) {
-      valid[valid.length - 1] = { role: msg.role, content: msg.content };
+    if (!msg.content || !msg.content.trim()) continue;
+    
+    if (valid.length === 0) {
+      if (msg.role === "user") {
+        valid.push({ role: "user", content: msg.content.trim() });
+      }
     } else {
-      valid.push({ role: msg.role, content: msg.content });
+      const last = valid[valid.length - 1];
+      if (last.role !== msg.role) {
+        valid.push({ role: msg.role, content: msg.content.trim() });
+      } else {
+        last.content = msg.content.trim();
+      }
     }
   }
-  if (valid.length > 0 && valid[valid.length - 1].role === "assistant") {
+
+  if (valid.length > 0 && valid[valid.length - 1].role === "user") {
     valid.pop();
   }
-  valid.push({ role: "user", content: currentUserMsg });
+
+  valid.push({ role: "user", content: currentUserMsg.trim() });
   return valid;
 };
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userText = msg.text;
-  const updateId = msg.message_id; // Usamos el ID del mensaje para el filtro anti-eco
+  const updateId = msg.message_id;
 
   if (!userText || userText.startsWith("/")) {
     if (userText === "/start") {
@@ -135,13 +148,10 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // FIX: Filtro anti-eco. Si el ID ya se procesó, ignoramos la repetición de Telegram
-  if (mensajesProcesados.has(updateId)) {
-    return;
-  }
+  // LÓGICA ANTI-ECO DE TELEGRAM
+  if (mensajesProcesados.has(updateId)) return;
   mensajesProcesados.add(updateId);
 
-  // Limpieza del Set de IDs para no saturar memoria
   if (mensajesProcesados.size > 50) {
     const firstKey = mensajesProcesados.keys().next().value;
     mensajesProcesados.delete(firstKey);
@@ -149,19 +159,24 @@ bot.on("message", async (msg) => {
 
   try {
     bot.sendChatAction(chatId, "typing");
-    await saveMessage("user", userText);
 
-const [recentHistory, profile] = await Promise.all([
+    // 1. Jalamos el historial ANTES de guardar el nuevo mensaje
+    const [recentHistory, profile] = await Promise.all([
       getRecentMessages(),
       getProfile()
     ]);
 
+    // 2. Guardamos el mensaje en BD en background
+    saveMessage("user", userText);
+
     const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
     
+    // 3. Construimos el historial limpio para Claude
     const messages = buildMessages(recentHistory, userText);
-    
-const response = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-latest", 
+
+    // 4. Llamada a Anthropic con el modelo exacto que no lanza error 404
+    const response = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-20241022", 
       max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection,
       messages,
@@ -170,10 +185,12 @@ const response = await anthropic.messages.create({
     let reply = response.content[0].text;
     reply = await extractAndSaveMemory(reply);
 
+    // 5. Guardamos y respondemos
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
+
   } catch (err) {
-    console.error("Error:", err);
+    console.error("Error en el bot:", err);
     bot.sendMessage(chatId, "Algo salió mal. Intenta de nuevo.");
   }
 });
