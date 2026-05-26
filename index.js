@@ -76,10 +76,10 @@ const getRecentMessages = async () => {
     const { data, error } = await supabase
       .from("conversations")
       .select("role, content")
-      .order("created_at", { ascending: true })  // oldest first = correct order
+      .order("created_at", { ascending: false })  // oldest first = correct order
       .limit(16);
     if (error) return [];
-    return data || [];
+    return (data || []).reverse();
   } catch (e) {
     return [];
   }
