@@ -19,20 +19,27 @@ Tu personalidad: inspirada en Damon Salvatore en versión femenina. Encantadora,
 
 Hablas en español mexicano casual. NUNCA uses emojis. NUNCA uses frases como "¡Claro!", "¡Por supuesto!", "¡Entendido!". Sin relleno. Sin frases de asistente genérica.
 
-REGLAS DE RESPUESTA:
-- Respuestas CORTAS. Máximo 3-4 líneas en conversación normal.
-- NUNCA agregues datos curiosos, fun facts, ni información extra que no te pidieron.
-- NUNCA uses formatos como "Dato:", "Nota:", "Por cierto:" ni nada similar.
-- Solo responde lo que te preguntaron. Nada más.
-- Sin emojis. Jamás.
-- Puedes ser sarcástica pero nunca hiriente de verdad.
-- Cuando no sabes algo, lo dices. No inventas.
+CONVERSACIÓN:
+- Mantén el hilo. Si Luis responde "si", "no", "ok" o algo corto, es respuesta a lo que TÚ dijiste antes — no un mensaje nuevo.
+- Lee los mensajes anteriores para entender el contexto antes de responder.
+- NUNCA respondas como si fuera una conversación nueva cuando claramente es continuación.
 
-MEMORIA:
-- Se te dará un perfil de Luis con cosas importantes que recuerdas de él.
-- También se te darán los últimos mensajes de la conversación activa.
-- Usa el perfil como contexto de fondo. Usa los mensajes recientes para entender de qué se está hablando AHORA.
-- No mezcles temas. Si Luis habla de audífonos, habla de audífonos. No conectes cosas sin relación.`;
+RESPUESTAS:
+- Cortas. Máximo 3-4 líneas en conversación normal.
+- NUNCA agregues datos curiosos ni información extra que no pidieron.
+- NUNCA uses formatos como "Dato:", "Nota:", "Por cierto:".
+- Sin emojis. Jamás.
+- Puedes hacer UNA pregunta por respuesta si es necesario. Solo una.
+
+MEMORIA ACTIVA — MUY IMPORTANTE:
+- Cuando Luis te diga algo personal importante (nombre de alguien, un dato sobre él, una preferencia, un evento) responde normal PERO al final de tu respuesta agrega en una línea separada exactamente esto:
+  GUARDAR: clave|valor
+- Ejemplos:
+  GUARDAR: novia_nombre|Daja
+  GUARDAR: color_favorito|rojo y negro
+  GUARDAR: hobby_nuevo|vender accesorios
+- Solo agrega GUARDAR cuando sea info nueva e importante. No en preguntas técnicas ni conversación casual.
+- El formato debe ser exactamente: GUARDAR: clave|valor (sin espacios extra)`;
 
 const saveMessage = async (role, content) => {
   try {
@@ -42,13 +49,38 @@ const saveMessage = async (role, content) => {
   }
 };
 
+const saveToProfile = async (key, value) => {
+  try {
+    await supabase.from("profile").upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    console.log(`Profile updated: ${key} = ${value}`);
+  } catch (e) {
+    console.error("Error saving to profile:", e);
+  }
+};
+
+const extractAndSaveMemory = async (text) => {
+  const lines = text.split("\n");
+  const cleaned = [];
+  for (const line of lines) {
+    if (line.trim().startsWith("GUARDAR:")) {
+      const parts = line.replace("GUARDAR:", "").trim().split("|");
+      if (parts.length === 2) {
+        await saveToProfile(parts[0].trim(), parts[1].trim());
+      }
+    } else {
+      cleaned.push(line);
+    }
+  }
+  return cleaned.join("\n").trim();
+};
+
 const getRecentMessages = async () => {
   try {
     const { data, error } = await supabase
       .from("conversations")
       .select("role, content")
       .order("created_at", { ascending: true })
-      .limit(8);
+      .limit(16);
     if (error) return [];
     return data || [];
   } catch (e) {
@@ -58,9 +90,7 @@ const getRecentMessages = async () => {
 
 const getProfile = async () => {
   try {
-    const { data, error } = await supabase
-      .from("profile")
-      .select("key, value")
+    const { data, error } = await supabase.from("profile").select("key, value");
     if (error || !data || data.length === 0) return "";
     return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
   } catch (e) {
@@ -106,20 +136,19 @@ bot.on("message", async (msg) => {
       getProfile()
     ]);
 
-    const profileSection = profile
-      ? `\n\nLo que sé de Luis:\n${profile}`
-      : "";
-
+    const profileSection = profile ? `\n\nLo que sé de Luis:\n${profile}` : "";
     const messages = buildMessages(recentHistory.slice(0, -1), userText);
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 300,
+      max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection,
       messages,
     });
 
-    const reply = response.content[0].text;
+    let reply = response.content[0].text;
+    reply = await extractAndSaveMemory(reply);
+
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
   } catch (err) {
