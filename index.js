@@ -174,3 +174,93 @@ bot.on("message", async (msg) => {
 });
 
 console.log("Gaia Telegram bot running...");
+
+
+// ── PHOTO SUPPORT ──────────────────────────────────────────────
+const https = require("https");
+const http = require("http");
+
+const downloadPhoto = (url) => {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve(Buffer.concat(chunks).toString("base64")));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+};
+
+bot.on("photo", async (msg) => {
+  const chatId = msg.chat.id;
+  const messageId = msg.message_id;
+  const caption = msg.caption || "¿Qué ves en esta imagen?";
+
+  if (processedMessages.has(messageId)) return;
+  processedMessages.add(messageId);
+  if (processedMessages.size > 100) {
+    const first = processedMessages.values().next().value;
+    processedMessages.delete(first);
+  }
+
+  try {
+    bot.sendChatAction(chatId, "typing");
+    await saveMessage("user", `[foto enviada] ${caption}`);
+
+    // Get highest quality photo
+    const photo = msg.photo[msg.photo.length - 1];
+    const fileInfo = await bot.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`;
+    const base64Image = await downloadPhoto(fileUrl);
+
+    const [recentHistory, profile] = await Promise.all([
+      getRecentMessages(),
+      getProfile()
+    ]);
+
+    const profileSection = profile
+      ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
+      : "";
+
+    const history = buildMessages(recentHistory.slice(0, -1));
+
+    // Build message with image
+    const imageMessage = {
+      role: "user",
+      content: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/jpeg",
+            data: base64Image,
+          },
+        },
+        {
+          type: "text",
+          text: caption,
+        },
+      ],
+    };
+
+    const messages = [...history, imageMessage];
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 400,
+      system: GAIA_SYSTEM_PROMPT + profileSection,
+      messages,
+    });
+
+    let reply = response.content[0].text;
+    reply = await extractAndSaveMemory(reply);
+
+    await saveMessage("assistant", reply);
+    bot.sendMessage(chatId, reply);
+  } catch (err) {
+    console.error("Photo error:", err);
+    bot.sendMessage(chatId, "No pude procesar la foto. Intenta de nuevo.");
+  }
+});
+// ── END PHOTO SUPPORT ──────────────────────────────────────────
