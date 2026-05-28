@@ -145,6 +145,10 @@ bot.on("message", async (msg) => {
       getProfile()
     ]);
 
+    const now = new Date();
+    const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+
     const profileSection = profile
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
       : "";
@@ -158,7 +162,7 @@ bot.on("message", async (msg) => {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
-      system: GAIA_SYSTEM_PROMPT + profileSection,
+      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
       messages,
     });
 
@@ -219,6 +223,10 @@ bot.on("photo", async (msg) => {
       getProfile()
     ]);
 
+    const now = new Date();
+    const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+
     const profileSection = profile
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
       : "";
@@ -249,7 +257,7 @@ bot.on("photo", async (msg) => {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
-      system: GAIA_SYSTEM_PROMPT + profileSection,
+      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
       messages,
     });
 
