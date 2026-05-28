@@ -80,7 +80,7 @@ const getRecentMessages = async () => {
       .from("conversations")
       .select("id, role, content")
       .order("created_at", { ascending: false })
-      .limit(16);
+      .limit(20);
     if (error || !data) return [];
     return data.reverse();
   } catch (e) {
