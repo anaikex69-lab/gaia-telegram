@@ -33,13 +33,11 @@ RESPUESTAS:
 - Usa el perfil de Luis como contexto de fondo — no lo menciones a menos que sea relevante.
 
 MEMORIA ACTIVA:
-- Guarda información importante al final de tu respuesta con este formato exacto:
+- Si Luis te dice algo nuevo e importante sobre él guárdalo al final de tu respuesta:
   GUARDAR: clave|valor
-- Guarda cuando Luis te diga algo importante sobre él (nombre de persona, preferencia, evento, dato personal).
-- Guarda también TUS PROPIAS decisiones y preferencias importantes — si eliges algo sobre ti misma, si decides cómo eres, si opinas algo que vale la pena recordar, guárdalo.
-- Solo info NUEVA que no está ya en el perfil.
+- Solo cuando sea info NUEVA que no está ya en su perfil.
 - Nunca en preguntas técnicas o conversación casual.
-- Formato exacto: GUARDAR: clave|valor (sin espacios extra, sin líneas extra)
+- Formato exacto: GUARDAR: clave|valor`;
 
 const saveMessage = async (role, content) => {
   try {
@@ -82,7 +80,7 @@ const getRecentMessages = async () => {
       .from("conversations")
       .select("id, role, content")
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(16);
     if (error || !data) return [];
     return data.reverse();
   } catch (e) {
