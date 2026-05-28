@@ -175,9 +175,13 @@ bot.on("message", async (msg) => {
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
       : "";
 
-    const searchKeywords = ["que es", "como esta", "precio", "clima", "noticias", "hoy", "ahorita", "actualmente", "cuanto cuesta", "donde esta", "cuando", "busca", "que paso", "quien es"];
-    const needsSearch = TAVILY_KEY && searchKeywords.some(kw => userText.toLowerCase().includes(kw));
-    const searchResults = needsSearch ? await searchWeb(userText) : "";
+    const explicitSearch = ["busca ", "búscame ", "buscar ", "búscalo", "búscala", "investiga ", "googlea "];
+    const needsSearch = TAVILY_KEY && explicitSearch.some(kw => userText.toLowerCase().includes(kw));
+    let searchResults = "";
+    if (needsSearch) {
+      await bot.sendMessage(chatId, "Buscando en la web...");
+      searchResults = await searchWeb(userText);
+    }
 
     const messages = buildMessages(recentHistory);
 
