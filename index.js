@@ -6,6 +6,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const TAVILY_KEY = process.env.TAVILY_KEY;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
@@ -13,6 +14,21 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Prevent duplicate message processing
 const processedMessages = new Set();
+
+const searchWeb = async (query) => {
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: TAVILY_KEY, query, max_results: 3, search_depth: "basic" })
+    });
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) return "";
+    return data.results.map(r => `- ${r.title}: ${r.content ? r.content.slice(0, 200) : ""}`).join("\n");
+  } catch (e) {
+    return "";
+  }
+};
 
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
 
@@ -32,10 +48,16 @@ RESPUESTAS:
 - Una sola pregunta por respuesta si es necesario. Solo una.
 - Usa el perfil de Luis como contexto de fondo — no lo menciones a menos que sea relevante.
 
+BÚSQUEDA WEB:
+- Si tienes resultados de búsqueda en el contexto, úsalos para responder con información actual.
+- Sé directa con la info, no expliques que buscaste.
+
 MEMORIA ACTIVA:
-- Si Luis te dice algo nuevo e importante sobre él guárdalo al final de tu respuesta:
+- Guarda información importante al final de tu respuesta con este formato exacto:
   GUARDAR: clave|valor
-- Solo cuando sea info NUEVA que no está ya en su perfil.
+- Guarda cuando Luis te diga algo importante sobre él.
+- Guarda también TUS PROPIAS decisiones y preferencias importantes.
+- Solo info NUEVA que no está ya en el perfil.
 - Nunca en preguntas técnicas o conversación casual.
 - Formato exacto: GUARDAR: clave|valor`;
 
@@ -122,10 +144,8 @@ bot.on("message", async (msg) => {
   const userText = msg.text;
   const messageId = msg.message_id;
 
-  // Skip already processed messages
   if (processedMessages.has(messageId)) return;
   processedMessages.add(messageId);
-  // Clean up old entries to avoid memory leak
   if (processedMessages.size > 100) {
     const first = processedMessages.values().next().value;
     processedMessages.delete(first);
@@ -155,6 +175,10 @@ bot.on("message", async (msg) => {
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
       : "";
 
+    const searchKeywords = ["que es", "como esta", "precio", "clima", "noticias", "hoy", "ahorita", "actualmente", "cuanto cuesta", "donde esta", "cuando", "busca", "que paso", "quien es"];
+    const needsSearch = TAVILY_KEY && searchKeywords.some(kw => userText.toLowerCase().includes(kw));
+    const searchResults = needsSearch ? await searchWeb(userText) : "";
+
     const messages = buildMessages(recentHistory);
 
     if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
@@ -164,7 +188,7 @@ bot.on("message", async (msg) => {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
-      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
+      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : ""),
       messages,
     });
 
@@ -214,7 +238,6 @@ bot.on("photo", async (msg) => {
     bot.sendChatAction(chatId, "typing");
     await saveMessage("user", `[foto enviada] ${caption}`);
 
-    // Get highest quality photo
     const photo = msg.photo[msg.photo.length - 1];
     const fileInfo = await bot.getFile(photo.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`;
@@ -235,22 +258,11 @@ bot.on("photo", async (msg) => {
 
     const history = buildMessages(recentHistory.slice(0, -1));
 
-    // Build message with image
     const imageMessage = {
       role: "user",
       content: [
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/jpeg",
-            data: base64Image,
-          },
-        },
-        {
-          type: "text",
-          text: caption,
-        },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Image } },
+        { type: "text", text: caption },
       ],
     };
 
