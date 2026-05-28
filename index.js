@@ -116,6 +116,8 @@ const buildMessages = (history) => {
 };
 
 bot.on("message", async (msg) => {
+  // Ignore photo messages — handled by bot.on("photo")
+  if (msg.photo) return;
   const chatId = msg.chat.id;
   const userText = msg.text;
   const messageId = msg.message_id;
