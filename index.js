@@ -216,7 +216,7 @@ bot.on("message", async (msg) => {
     const maxTokens = isShort ? 150 : 400;
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: maxTokens,
       system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : ""),
       messages,
@@ -309,7 +309,7 @@ bot.on("photo", async (msg) => {
     const messages = [...history, imageMessage];
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
       messages,
