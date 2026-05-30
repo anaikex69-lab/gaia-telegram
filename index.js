@@ -83,14 +83,14 @@ const saveToProfile = async (key, value) => {
   }
 };
 
-const extractAndSaveMemory = async (text) => {
+const extractAndSaveMemory = async (text, category = "personal") => {
   const lines = text.split("\n");
   const cleaned = [];
   for (const line of lines) {
     if (line.trim().startsWith("GUARDAR:")) {
       const parts = line.replace("GUARDAR:", "").trim().split("|");
       if (parts.length === 2) {
-        await saveToProfile(parts[0].trim(), parts[1].trim());
+        await saveToProfileCategories(parts[0].trim(), parts[1].trim(), category);
       }
     } else {
       cleaned.push(line);
@@ -122,13 +122,38 @@ const getRecentMessages = async (limit = 12) => {
   }
 };
 
-const getProfile = async () => {
+// ── MEMORIA POR CATEGORÍAS: detecta qué categoría necesita el mensaje ──
+const detectCategory = (text) => {
+  const t = text.toLowerCase();
+  if (/deuda|dinero|pago|ingreso|peso|plata|kueski|klar|banco|mercado pago|mexdin|nelo|prestamo|préstamo|interés|finanza/.test(t)) return "finanzas";
+  if (/tarea|examen|clase|materia|físic|cálculo|límite|ingles|inglés|semiconductor|escuela|estudio|carrera|posgrado|maestría|calculo|cinvestav|iso|estadística|miller|cristal/.test(t)) return "escuela";
+  if (/trabajo|restaurante|cocinero|excel|accesorio|venta/.test(t)) return "trabajo";
+  if (/pendiente|recordar|recuerda|viaje|mazamitla/.test(t)) return "pendientes";
+  return "personal";
+};
+
+const getProfile = async (category) => {
   try {
-    const { data, error } = await supabase.from("profile").select("key, value");
+    const categories = category && category !== "personal" ? ["personal", category] : ["personal"];
+    const { data, error } = await supabase
+      .from("profile_categories")
+      .select("key, value")
+      .in("category", categories);
     if (error || !data || data.length === 0) return "";
     return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
   } catch (e) {
     return "";
+  }
+};
+
+const saveToProfileCategories = async (key, value, category = "personal") => {
+  try {
+    await supabase.from("profile_categories").upsert(
+      { category, key, value, updated_at: new Date().toISOString() },
+      { onConflict: "category,key" }
+    );
+  } catch (e) {
+    console.error("Error saving profile_categories:", e);
   }
 };
 
@@ -179,9 +204,10 @@ bot.on("message", async (msg) => {
 
     // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(userText);
+    const category = detectCategory(userText);
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
-      getProfile()
+      getProfile(category)
     ]);
 
     // ── CAMBIO 3: Fecha solo si el mensaje la necesita ──
@@ -223,7 +249,7 @@ bot.on("message", async (msg) => {
     });
 
     let reply = response.content[0].text;
-    reply = await extractAndSaveMemory(reply);
+    reply = await extractAndSaveMemory(reply, category);
 
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
@@ -278,9 +304,10 @@ bot.on("photo", async (msg) => {
 
     // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(caption);
+    const category = detectCategory(caption);
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
-      getProfile()
+      getProfile(category)
     ]);
 
     // ── CAMBIO 3: Fecha solo si el caption la necesita ──
@@ -316,7 +343,7 @@ bot.on("photo", async (msg) => {
     });
 
     let reply = response.content[0].text;
-    reply = await extractAndSaveMemory(reply);
+    reply = await extractAndSaveMemory(reply, category);
 
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
