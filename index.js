@@ -99,13 +99,22 @@ const extractAndSaveMemory = async (text) => {
   return cleaned.join("\n").trim();
 };
 
-const getRecentMessages = async () => {
+// ── CAMBIO 4: Historial dinámico según tipo de mensaje ──
+const getHistoryLimit = (text) => {
+  const needsContext = /recuerdas|como te dije|antes me dijiste|te mencioné|te conté|acuérdate|acuerdate/.test(text.toLowerCase());
+  const isShortReply = text.length < 10;
+  if (needsContext) return 20;
+  if (isShortReply) return 8;
+  return 12;
+};
+
+const getRecentMessages = async (limit = 12) => {
   try {
     const { data, error } = await supabase
       .from("conversations")
       .select("id, role, content")
       .order("created_at", { ascending: false })
-      .limit(16);
+      .limit(limit);
     if (error || !data) return [];
     return data.reverse();
   } catch (e) {
@@ -168,8 +177,10 @@ bot.on("message", async (msg) => {
     bot.sendChatAction(chatId, "typing");
     await saveMessage("user", userText);
 
+    // ── CAMBIO 4: Historial dinámico ──
+    const historyLimit = getHistoryLimit(userText);
     const [recentHistory, profile] = await Promise.all([
-      getRecentMessages(),
+      getRecentMessages(historyLimit),
       getProfile()
     ]);
 
@@ -205,7 +216,7 @@ bot.on("message", async (msg) => {
     const maxTokens = isShort ? 150 : 400;
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-20250514",
       max_tokens: maxTokens,
       system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : ""),
       messages,
@@ -265,8 +276,10 @@ bot.on("photo", async (msg) => {
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`;
     const base64Image = await downloadPhoto(fileUrl);
 
+    // ── CAMBIO 4: Historial dinámico ──
+    const historyLimit = getHistoryLimit(caption);
     const [recentHistory, profile] = await Promise.all([
-      getRecentMessages(),
+      getRecentMessages(historyLimit),
       getProfile()
     ]);
 
@@ -296,7 +309,7 @@ bot.on("photo", async (msg) => {
     const messages = [...history, imageMessage];
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 400,
       system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
       messages,
