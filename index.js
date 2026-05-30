@@ -205,9 +205,11 @@ bot.on("message", async (msg) => {
     // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(userText);
     const category = detectCategory(userText);
+    // ── PERFIL BAJO DEMANDA: solo carga si Luis lo pide explícitamente ──
+    const needsProfile = /recuerda|acuérdate|acuerdate|sabes que|te dije|te conté|te conte|mi perfil|mis datos|qué sabes de mí|que sabes de mi|deuda|cuánto debo|cuanto debo|pendiente|tarea pendiente/.test(userText.toLowerCase());
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
-      getProfile(category)
+      needsProfile ? getProfile(category) : Promise.resolve("")
     ]);
 
     // ── CAMBIO 3: Fecha solo si el mensaje la necesita ──
@@ -241,10 +243,23 @@ bot.on("message", async (msg) => {
     const isShort = userText.length < 80 && !/explica|describe|escribe|redacta|lista|resume|analiza|ayúdame|ayudame/.test(userText.toLowerCase());
     const maxTokens = isShort ? 150 : 400;
 
+    // ── CACHÉ: personalidad fija cacheada, perfil/fecha dinámicos sin caché ──
+    const systemBlocks = [
+      {
+        type: "text",
+        text: GAIA_SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" }
+      }
+    ];
+    const dynamicSection = profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : "");
+    if (dynamicSection.trim()) {
+      systemBlocks.push({ type: "text", text: dynamicSection });
+    }
+
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: maxTokens,
-      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : ""),
+      system: systemBlocks,
       messages,
     });
 
@@ -305,9 +320,11 @@ bot.on("photo", async (msg) => {
     // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(caption);
     const category = detectCategory(caption);
+    // ── PERFIL BAJO DEMANDA ──
+    const needsProfile = /recuerda|acuérdate|acuerdate|sabes que|te dije|te conté|te conte|mi perfil|mis datos/.test(caption.toLowerCase());
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
-      getProfile(category)
+      needsProfile ? getProfile(category) : Promise.resolve("")
     ]);
 
     // ── CAMBIO 3: Fecha solo si el caption la necesita ──
@@ -335,10 +352,23 @@ bot.on("photo", async (msg) => {
 
     const messages = [...history, imageMessage];
 
+    // ── CACHÉ: personalidad fija cacheada, perfil/fecha dinámicos sin caché ──
+    const systemBlocks = [
+      {
+        type: "text",
+        text: GAIA_SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" }
+      }
+    ];
+    const dynamicSection = profileSection + fechaSection;
+    if (dynamicSection.trim()) {
+      systemBlocks.push({ type: "text", text: dynamicSection });
+    }
+
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
-      system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection,
+      system: systemBlocks,
       messages,
     });
 
