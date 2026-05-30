@@ -8,6 +8,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const TAVILY_KEY = process.env.TAVILY_KEY;
 
+// ── CAMBIO 1: Tu chatId, solo tú puedes hablar con Gaia ──
+const LUIS_CHAT_ID = 7710709320;
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -144,6 +147,9 @@ bot.on("message", async (msg) => {
   const userText = msg.text;
   const messageId = msg.message_id;
 
+  // ── CAMBIO 1: Bloquea cualquier usuario que no sea Luis ──
+  if (chatId !== LUIS_CHAT_ID) return;
+
   if (processedMessages.has(messageId)) return;
   processedMessages.add(messageId);
   if (processedMessages.size > 100) {
@@ -167,9 +173,14 @@ bot.on("message", async (msg) => {
       getProfile()
     ]);
 
-    const now = new Date();
-    const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    const fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+    // ── CAMBIO 3: Fecha solo si el mensaje la necesita ──
+    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia|semana|tarde|noche|mañana/.test(userText.toLowerCase());
+    let fechaSection = "";
+    if (needsDate) {
+      const now = new Date();
+      const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+    }
 
     const profileSection = profile
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
@@ -189,9 +200,13 @@ bot.on("message", async (msg) => {
       messages.push({ role: "user", content: userText });
     }
 
+    // ── CAMBIO 4: Tokens dinámicos según longitud del mensaje ──
+    const isShort = userText.length < 80 && !/explica|describe|escribe|redacta|lista|resume|analiza|ayúdame|ayudame/.test(userText.toLowerCase());
+    const maxTokens = isShort ? 150 : 400;
+
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 400,
+      max_tokens: maxTokens,
       system: GAIA_SYSTEM_PROMPT + profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : ""),
       messages,
     });
@@ -231,6 +246,9 @@ bot.on("photo", async (msg) => {
   const messageId = msg.message_id;
   const caption = msg.caption || "¿Qué ves en esta imagen?";
 
+  // ── CAMBIO 1: Bloquea cualquier usuario que no sea Luis ──
+  if (chatId !== LUIS_CHAT_ID) return;
+
   if (processedMessages.has(messageId)) return;
   processedMessages.add(messageId);
   if (processedMessages.size > 100) {
@@ -252,9 +270,14 @@ bot.on("photo", async (msg) => {
       getProfile()
     ]);
 
-    const now = new Date();
-    const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    const fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+    // ── CAMBIO 3: Fecha solo si el caption la necesita ──
+    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia|semana|tarde|noche/.test(caption.toLowerCase());
+    let fechaSection = "";
+    if (needsDate) {
+      const now = new Date();
+      const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+    }
 
     const profileSection = profile
       ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
