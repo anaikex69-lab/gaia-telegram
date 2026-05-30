@@ -266,6 +266,12 @@ bot.on("message", async (msg) => {
     let reply = response.content[0].text;
     reply = await extractAndSaveMemory(reply, category);
 
+    // ── LOG DE COSTO ──
+    const inputTokens = response.usage.input_tokens;
+    const outputTokens = response.usage.output_tokens;
+    const costo = ((inputTokens * 0.000003) + (outputTokens * 0.000015)).toFixed(5);
+    console.log(`[GAIA] Tokens: ${inputTokens} entrada / ${outputTokens} salida | Costo: $${costo} | Categoría: ${category}`);
+
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
   } catch (err) {
