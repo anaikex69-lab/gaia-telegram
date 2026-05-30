@@ -18,6 +18,44 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Prevent duplicate message processing
 const processedMessages = new Set();
 
+// ── STATS EN MEMORIA ──
+const stats = {
+  totalMensajes: 0,
+  totalTokensEntrada: 0,
+  totalTokensSalida: 0,
+  costoTotal: 0,
+  inicio: new Date(),
+  porHora: []
+};
+
+const registrarUso = (inputTokens, outputTokens, costo) => {
+  stats.totalMensajes++;
+  stats.totalTokensEntrada += inputTokens;
+  stats.totalTokensSalida += outputTokens;
+  stats.costoTotal += parseFloat(costo);
+  stats.porHora.push({ ts: Date.now(), tokens: inputTokens + outputTokens, costo: parseFloat(costo) });
+  // Solo guardar última hora
+  const unaHora = Date.now() - 3600000;
+  stats.porHora = stats.porHora.filter(e => e.ts > unaHora);
+};
+
+const getStats = () => {
+  const horaTokens = stats.porHora.reduce((a, e) => a + e.tokens, 0);
+  const horaCosto = stats.porHora.reduce((a, e) => a + e.costo, 0).toFixed(5);
+  const horaMensajes = stats.porHora.length;
+  const diasActivo = ((Date.now() - stats.inicio) / 86400000).toFixed(1);
+  return `Stats desde que arrancó (hace ${diasActivo} días):
+- Mensajes: ${stats.totalMensajes}
+- Tokens entrada: ${stats.totalTokensEntrada.toLocaleString()}
+- Tokens salida: ${stats.totalTokensSalida.toLocaleString()}
+- Costo total: $${stats.costoTotal.toFixed(5)} USD
+
+Última hora:
+- Mensajes: ${horaMensajes}
+- Tokens: ${horaTokens.toLocaleString()}
+- Costo: $${horaCosto} USD`;
+};
+
 const searchWeb = async (query) => {
   try {
     const res = await fetch("https://api.tavily.com/search", {
@@ -194,6 +232,8 @@ bot.on("message", async (msg) => {
   if (!userText || userText.startsWith("/")) {
     if (userText === "/start") {
       bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
+    } else if (userText === "/stats") {
+      bot.sendMessage(chatId, getStats());
     }
     return;
   }
@@ -271,6 +311,7 @@ bot.on("message", async (msg) => {
     const outputTokens = response.usage.output_tokens;
     const costo = ((inputTokens * 0.000003) + (outputTokens * 0.000015)).toFixed(5);
     console.log(`[GAIA] Tokens: ${inputTokens} entrada / ${outputTokens} salida | Costo: $${costo} | Categoría: ${category}`);
+    registrarUso(inputTokens, outputTokens, costo);
 
     await saveMessage("assistant", reply);
     bot.sendMessage(chatId, reply);
