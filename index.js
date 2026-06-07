@@ -175,12 +175,9 @@ const extractTextFromBuffer = async (buffer, mimeType, fileName) => {
   }
   if (ext === "pdf" || mimeType === "application/pdf") {
     try {
-      const text = buffer.toString("latin1");
-      const matches = text.match(/\((.*?)\)/g) || [];
-      const extracted = matches.map(m => m.slice(1, -1))
-        .filter(s => s.length > 1 && /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(s))
-        .join(" ").slice(0, 6000);
-      return extracted || "No se pudo extraer texto del PDF. Manda una foto de las páginas.";
+      const pdfParse = require("pdf-parse");
+      const data = await pdfParse(buffer);
+      return data.text.slice(0, 6000);
     } catch (e) { return "No se pudo leer el PDF."; }
   }
   if (["xlsx", "xls"].includes(ext)) {
