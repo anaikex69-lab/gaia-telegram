@@ -7,25 +7,17 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const TAVILY_KEY = process.env.TAVILY_KEY;
-
-// ── CAMBIO 1: Tu chatId, solo tú puedes hablar con Gaia ──
 const LUIS_CHAT_ID = 7710709320;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Prevent duplicate message processing
 const processedMessages = new Set();
 
-// ── STATS EN MEMORIA ──
 const stats = {
-  totalMensajes: 0,
-  totalTokensEntrada: 0,
-  totalTokensSalida: 0,
-  costoTotal: 0,
-  inicio: new Date(),
-  porHora: []
+  totalMensajes: 0, totalTokensEntrada: 0, totalTokensSalida: 0,
+  costoTotal: 0, inicio: new Date(), porHora: []
 };
 
 const registrarUso = (inputTokens, outputTokens, costo) => {
@@ -34,26 +26,14 @@ const registrarUso = (inputTokens, outputTokens, costo) => {
   stats.totalTokensSalida += outputTokens;
   stats.costoTotal += parseFloat(costo);
   stats.porHora.push({ ts: Date.now(), tokens: inputTokens + outputTokens, costo: parseFloat(costo) });
-  // Solo guardar última hora
-  const unaHora = Date.now() - 3600000;
-  stats.porHora = stats.porHora.filter(e => e.ts > unaHora);
+  stats.porHora = stats.porHora.filter(e => e.ts > Date.now() - 3600000);
 };
 
 const getStats = () => {
   const horaTokens = stats.porHora.reduce((a, e) => a + e.tokens, 0);
   const horaCosto = stats.porHora.reduce((a, e) => a + e.costo, 0).toFixed(5);
-  const horaMensajes = stats.porHora.length;
   const diasActivo = ((Date.now() - stats.inicio) / 86400000).toFixed(1);
-  return `Stats desde que arrancó (hace ${diasActivo} días):
-- Mensajes: ${stats.totalMensajes}
-- Tokens entrada: ${stats.totalTokensEntrada.toLocaleString()}
-- Tokens salida: ${stats.totalTokensSalida.toLocaleString()}
-- Costo total: $${stats.costoTotal.toFixed(5)} USD
-
-Última hora:
-- Mensajes: ${horaMensajes}
-- Tokens: ${horaTokens.toLocaleString()}
-- Costo: $${horaCosto} USD`;
+  return `Stats (hace ${diasActivo} días):\n- Mensajes: ${stats.totalMensajes}\n- Tokens entrada: ${stats.totalTokensEntrada.toLocaleString()}\n- Tokens salida: ${stats.totalTokensSalida.toLocaleString()}\n- Costo total: $${stats.costoTotal.toFixed(5)} USD\n\nÚltima hora:\n- Mensajes: ${stats.porHora.length}\n- Tokens: ${horaTokens.toLocaleString()}\n- Costo: $${horaCosto} USD`;
 };
 
 const searchWeb = async (query) => {
@@ -66,9 +46,7 @@ const searchWeb = async (query) => {
     const data = await res.json();
     if (!data.results || data.results.length === 0) return "";
     return data.results.map(r => `- ${r.title}: ${r.content ? r.content.slice(0, 200) : ""}`).join("\n");
-  } catch (e) {
-    return "";
-  }
+  } catch (e) { return ""; }
 };
 
 const GAIA_SYSTEM_PROMPT = `Eres Gaia. La asistente personal de Luis.
@@ -93,95 +71,19 @@ BÚSQUEDA WEB:
 - Si tienes resultados de búsqueda en el contexto, úsalos para responder con información actual.
 - Sé directa con la info, no expliques que buscaste.
 
+DOCUMENTOS:
+- Cuando recibas contenido de un archivo, analízalo y responde lo que Luis necesite.
+- Si es tarea o examen, ayuda directamente. Si son datos, interprétalos.
+
 MEMORIA ACTIVA:
-- Guarda información importante al final de tu respuesta con este formato exacto:
+- Guarda información importante al final de tu respuesta:
   GUARDAR: clave|valor
-- Guarda cuando Luis te diga algo importante sobre él.
-- Guarda también TUS PROPIAS decisiones y preferencias importantes.
-- Solo info NUEVA que no está ya en el perfil.
-- Nunca en preguntas técnicas o conversación casual.
+- Solo info NUEVA. Nunca en preguntas técnicas o conversación casual.
 - Formato exacto: GUARDAR: clave|valor`;
 
 const saveMessage = async (role, content) => {
-  try {
-    await supabase.from("conversations").insert({ role, content });
-  } catch (e) {
-    console.error("Error saving:", e);
-  }
-};
-
-const saveToProfile = async (key, value) => {
-  try {
-    await supabase.from("profile").upsert(
-      { key, value, updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-  } catch (e) {
-    console.error("Error saving profile:", e);
-  }
-};
-
-const extractAndSaveMemory = async (text, category = "personal") => {
-  const lines = text.split("\n");
-  const cleaned = [];
-  for (const line of lines) {
-    if (line.trim().startsWith("GUARDAR:")) {
-      const parts = line.replace("GUARDAR:", "").trim().split("|");
-      if (parts.length === 2) {
-        await saveToProfileCategories(parts[0].trim(), parts[1].trim(), category);
-      }
-    } else {
-      cleaned.push(line);
-    }
-  }
-  return cleaned.join("\n").trim();
-};
-
-// ── CAMBIO 4: Historial dinámico según tipo de mensaje ──
-const getHistoryLimit = (text) => {
-  const needsContext = /recuerdas|como te dije|antes me dijiste|te mencioné|te conté|acuérdate|acuerdate/.test(text.toLowerCase());
-  const isShortReply = text.length < 10;
-  if (needsContext) return 20;
-  if (isShortReply) return 8;
-  return 12;
-};
-
-const getRecentMessages = async (limit = 12) => {
-  try {
-    const { data, error } = await supabase
-      .from("conversations")
-      .select("id, role, content")
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (error || !data) return [];
-    return data.reverse();
-  } catch (e) {
-    return [];
-  }
-};
-
-// ── MEMORIA POR CATEGORÍAS: detecta qué categoría necesita el mensaje ──
-const detectCategory = (text) => {
-  const t = text.toLowerCase();
-  if (/deuda|dinero|pago|ingreso|peso|plata|kueski|klar|banco|mercado pago|mexdin|nelo|prestamo|préstamo|interés|finanza/.test(t)) return "finanzas";
-  if (/tarea|examen|clase|materia|físic|cálculo|límite|ingles|inglés|semiconductor|escuela|estudio|carrera|posgrado|maestría|calculo|cinvestav|iso|estadística|miller|cristal/.test(t)) return "escuela";
-  if (/trabajo|restaurante|cocinero|excel|accesorio|venta/.test(t)) return "trabajo";
-  if (/pendiente|recordar|recuerda|viaje|mazamitla/.test(t)) return "pendientes";
-  return "personal";
-};
-
-const getProfile = async (category) => {
-  try {
-    const categories = category && category !== "personal" ? ["personal", category] : ["personal"];
-    const { data, error } = await supabase
-      .from("profile_categories")
-      .select("key, value")
-      .in("category", categories);
-    if (error || !data || data.length === 0) return "";
-    return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
-  } catch (e) {
-    return "";
-  }
+  try { await supabase.from("conversations").insert({ role, content }); }
+  catch (e) { console.error("Error saving:", e); }
 };
 
 const saveToProfileCategories = async (key, value, category = "personal") => {
@@ -190,9 +92,53 @@ const saveToProfileCategories = async (key, value, category = "personal") => {
       { category, key, value, updated_at: new Date().toISOString() },
       { onConflict: "category,key" }
     );
-  } catch (e) {
-    console.error("Error saving profile_categories:", e);
+  } catch (e) { console.error("Error saving profile:", e); }
+};
+
+const extractAndSaveMemory = async (text, category = "personal") => {
+  const lines = text.split("\n");
+  const cleaned = [];
+  for (const line of lines) {
+    if (line.trim().startsWith("GUARDAR:")) {
+      const parts = line.replace("GUARDAR:", "").trim().split("|");
+      if (parts.length === 2) await saveToProfileCategories(parts[0].trim(), parts[1].trim(), category);
+    } else { cleaned.push(line); }
   }
+  return cleaned.join("\n").trim();
+};
+
+const getHistoryLimit = (text) => {
+  if (/recuerdas|como te dije|antes me dijiste|te mencioné|te conté|acuérdate/.test(text.toLowerCase())) return 20;
+  if (text.length < 10) return 8;
+  return 12;
+};
+
+const getRecentMessages = async (limit = 12) => {
+  try {
+    const { data, error } = await supabase
+      .from("conversations").select("id, role, content")
+      .order("created_at", { ascending: false }).limit(limit);
+    if (error || !data) return [];
+    return data.reverse();
+  } catch (e) { return []; }
+};
+
+const detectCategory = (text) => {
+  const t = text.toLowerCase();
+  if (/deuda|dinero|pago|ingreso|kueski|klar|banco|mercado pago|mexdin|nelo|prestamo|préstamo|finanza/.test(t)) return "finanzas";
+  if (/tarea|examen|clase|materia|físic|cálculo|ingles|semiconductor|escuela|estudio|carrera|calculo|estadística|miller|cristal/.test(t)) return "escuela";
+  if (/trabajo|restaurante|cocinero|accesorio|venta/.test(t)) return "trabajo";
+  if (/pendiente|recordar|recuerda|viaje|mazamitla/.test(t)) return "pendientes";
+  return "personal";
+};
+
+const getProfile = async (category) => {
+  try {
+    const categories = category && category !== "personal" ? ["personal", category] : ["personal"];
+    const { data, error } = await supabase.from("profile_categories").select("key, value").in("category", categories);
+    if (error || !data || data.length === 0) return "";
+    return data.map(row => `- ${row.key}: ${row.value}`).join("\n");
+  } catch (e) { return ""; }
 };
 
 const buildMessages = (history) => {
@@ -200,40 +146,90 @@ const buildMessages = (history) => {
   for (const msg of history) {
     if (result.length === 0 && msg.role !== "user") continue;
     const last = result[result.length - 1];
-    if (last && last.role === msg.role) {
-      last.content += "\n" + msg.content;
-    } else {
-      result.push({ role: msg.role, content: msg.content });
-    }
+    if (last && last.role === msg.role) { last.content += "\n" + msg.content; }
+    else { result.push({ role: msg.role, content: msg.content }); }
   }
-  if (result.length > 0 && result[result.length - 1].role === "assistant") {
-    result.pop();
-  }
+  if (result.length > 0 && result[result.length - 1].role === "assistant") result.pop();
   return result;
 };
 
+const https = require("https");
+const http = require("http");
+
+const downloadFile = (url) => {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve(Buffer.concat(chunks)));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+};
+
+const extractTextFromBuffer = async (buffer, mimeType, fileName) => {
+  const ext = fileName.split(".").pop().toLowerCase();
+  if (["txt", "csv", "js", "py", "json", "md", "html", "css", "ts"].includes(ext)) {
+    return buffer.toString("utf-8").slice(0, 8000);
+  }
+  if (ext === "pdf" || mimeType === "application/pdf") {
+    try {
+      const text = buffer.toString("latin1");
+      const matches = text.match(/\((.*?)\)/g) || [];
+      const extracted = matches.map(m => m.slice(1, -1))
+        .filter(s => s.length > 1 && /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(s))
+        .join(" ").slice(0, 6000);
+      return extracted || "No se pudo extraer texto del PDF. Manda una foto de las páginas.";
+    } catch (e) { return "No se pudo leer el PDF."; }
+  }
+  if (["xlsx", "xls"].includes(ext)) {
+    try {
+      const XLSX = require("xlsx");
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      let result = "";
+      workbook.SheetNames.forEach(name => {
+        result += `[Hoja: ${name}]\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}\n\n`;
+      });
+      return result.slice(0, 8000);
+    } catch (e) { return "No se pudo leer el Excel."; }
+  }
+  if (["docx", "doc"].includes(ext)) {
+    try {
+      const mammoth = require("mammoth");
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value.slice(0, 8000);
+    } catch (e) { return "No se pudo leer el Word."; }
+  }
+  return `Archivo: ${fileName}. Tipo no soportado. Manda foto si es documento visual.`;
+};
+
+const callClaude = async (systemBlocks, messages, maxTokens = 300) => {
+  return await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: maxTokens,
+    system: systemBlocks,
+    messages,
+  });
+};
+
+// ── HANDLER DE TEXTO ──
 bot.on("message", async (msg) => {
-  // Ignore photo messages — handled by bot.on("photo")
-  if (msg.photo) return;
+  if (msg.photo || msg.document) return;
   const chatId = msg.chat.id;
   const userText = msg.text;
   const messageId = msg.message_id;
-
-  // ── CAMBIO 1: Bloquea cualquier usuario que no sea Luis ──
   if (chatId !== LUIS_CHAT_ID) return;
-
   if (processedMessages.has(messageId)) return;
   processedMessages.add(messageId);
-  if (processedMessages.size > 100) {
-    const first = processedMessages.values().next().value;
-    processedMessages.delete(first);
-  }
+  if (processedMessages.size > 100) processedMessages.delete(processedMessages.values().next().value);
 
   if (!userText || userText.startsWith("/")) {
-    if (userText === "/start") {
-      bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
-    } else if (userText === "/stats") {
-      bot.sendMessage(chatId, getStats());
+    if (userText === "/start") bot.sendMessage(chatId, "Luis. Ya era hora.\n\nSoy Gaia. Escríbeme.");
+    if (userText === "/stats") bot.sendMessage(chatId, getStats());
+    if (userText === "/reset") {
+      await supabase.from("conversations").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      bot.sendMessage(chatId, "Historial borrado. El perfil sigue intacto.");
     }
     return;
   }
@@ -242,31 +238,23 @@ bot.on("message", async (msg) => {
     bot.sendChatAction(chatId, "typing");
     await saveMessage("user", userText);
 
-    // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(userText);
     const category = detectCategory(userText);
-    // ── PERFIL BAJO DEMANDA: solo carga si Luis lo pide explícitamente ──
-    const needsProfile = /recuerda|acuérdate|acuerdate|sabes que|te dije|te conté|te conte|mi perfil|mis datos|qué sabes de mí|que sabes de mi|deuda|cuánto debo|cuanto debo|pendiente|tarea pendiente/.test(userText.toLowerCase());
+    const needsProfile = /recuerda|acuérdate|sabes que|te dije|te conté|mis datos|qué sabes|deuda|cuánto debo|pendiente/.test(userText.toLowerCase());
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
       needsProfile ? getProfile(category) : Promise.resolve("")
     ]);
 
-    // ── CAMBIO 3: Fecha solo si el mensaje la necesita ──
-    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia|semana|tarde|noche|mañana/.test(userText.toLowerCase());
+    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia|semana|tarde|noche/.test(userText.toLowerCase());
     let fechaSection = "";
     if (needsDate) {
       const now = new Date();
-      const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
-      fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+      fechaSection = `\n\nFecha y hora actual: ${now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })} (hora de Guadalajara)`;
     }
 
-    const profileSection = profile
-      ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
-      : "";
-
-    const explicitSearch = ["busca ", "búscame ", "buscar ", "búscalo", "búscala", "investiga ", "googlea "];
-    const needsSearch = TAVILY_KEY && explicitSearch.some(kw => userText.toLowerCase().includes(kw));
+    const profileSection = profile ? `\n\nPerfil de Luis:\n${profile}` : "";
+    const needsSearch = TAVILY_KEY && ["busca ", "búscame ", "buscar ", "búscalo", "búscala", "investiga ", "googlea "].some(kw => userText.toLowerCase().includes(kw));
     let searchResults = "";
     if (needsSearch) {
       await bot.sendMessage(chatId, "Buscando en la web...");
@@ -274,43 +262,23 @@ bot.on("message", async (msg) => {
     }
 
     const messages = buildMessages(recentHistory);
+    if (messages.length === 0 || messages[messages.length - 1].role !== "user") messages.push({ role: "user", content: userText });
 
-    if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
-      messages.push({ role: "user", content: userText });
-    }
-
-    // ── CAMBIO 4: Tokens dinámicos según longitud del mensaje ──
     const isShort = userText.length < 80 && !/explica|describe|escribe|redacta|lista|resume|analiza|ayúdame|ayudame/.test(userText.toLowerCase());
     const maxTokens = isShort ? 300 : 400;
 
-    // ── CACHÉ: personalidad fija cacheada, perfil/fecha dinámicos sin caché ──
-    const systemBlocks = [
-      {
-        type: "text",
-        text: GAIA_SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" }
-      }
-    ];
+    const systemBlocks = [{ type: "text", text: GAIA_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }];
     const dynamicSection = profileSection + fechaSection + (searchResults ? "\n\nResultados de búsqueda:\n" + searchResults : "");
-    if (dynamicSection.trim()) {
-      systemBlocks.push({ type: "text", text: dynamicSection });
-    }
+    if (dynamicSection.trim()) systemBlocks.push({ type: "text", text: dynamicSection });
 
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: maxTokens,
-      system: systemBlocks,
-      messages,
-    });
-
+    const response = await callClaude(systemBlocks, messages, maxTokens);
     let reply = response.content[0].text;
     reply = await extractAndSaveMemory(reply, category);
 
-    // ── LOG DE COSTO ──
     const inputTokens = response.usage.input_tokens;
     const outputTokens = response.usage.output_tokens;
     const costo = ((inputTokens * 0.000003) + (outputTokens * 0.000015)).toFixed(5);
-    console.log(`[GAIA] Tokens: ${inputTokens} entrada / ${outputTokens} salida | Costo: $${costo} | Categoría: ${category}`);
+    console.log(`[GAIA] ${inputTokens}in/${outputTokens}out | $${costo} | ${category}`);
     registrarUso(inputTokens, outputTokens, costo);
 
     await saveMessage("assistant", reply);
@@ -321,104 +289,118 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("Gaia Telegram bot running...");
-
-
-// ── PHOTO SUPPORT ──────────────────────────────────────────────
-const https = require("https");
-const http = require("http");
-
-const downloadPhoto = (url) => {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith("https") ? https : http;
-    client.get(url, (res) => {
-      const chunks = [];
-      res.on("data", (chunk) => chunks.push(chunk));
-      res.on("end", () => resolve(Buffer.concat(chunks).toString("base64")));
-      res.on("error", reject);
-    }).on("error", reject);
-  });
-};
-
-bot.on("photo", async (msg) => {
+// ── HANDLER DE DOCUMENTOS ──
+bot.on("document", async (msg) => {
   const chatId = msg.chat.id;
   const messageId = msg.message_id;
-  const caption = msg.caption || "¿Qué ves en esta imagen?";
-
-  // ── CAMBIO 1: Bloquea cualquier usuario que no sea Luis ──
   if (chatId !== LUIS_CHAT_ID) return;
-
   if (processedMessages.has(messageId)) return;
   processedMessages.add(messageId);
-  if (processedMessages.size > 100) {
-    const first = processedMessages.values().next().value;
-    processedMessages.delete(first);
+  if (processedMessages.size > 100) processedMessages.delete(processedMessages.values().next().value);
+
+  const doc = msg.document;
+  const caption = msg.caption || "Analiza este archivo y dime qué contiene.";
+  const fileName = doc.file_name || "archivo";
+
+  if (doc.file_size > 20 * 1024 * 1024) {
+    bot.sendMessage(chatId, "Archivo muy grande. Máximo 20MB.");
+    return;
   }
 
   try {
     bot.sendChatAction(chatId, "typing");
-    await saveMessage("user", `[foto enviada] ${caption}`);
+    await bot.sendMessage(chatId, `Leyendo ${fileName}...`);
+
+    const fileInfo = await bot.getFile(doc.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`;
+    const buffer = await downloadFile(fileUrl);
+    const extractedText = await extractTextFromBuffer(buffer, doc.mime_type || "", fileName);
+
+    await saveMessage("user", `[archivo: ${fileName}] ${caption}`);
+
+    const category = detectCategory(caption + " " + fileName);
+    const [recentHistory, profile] = await Promise.all([
+      getRecentMessages(12),
+      getProfile(category)
+    ]);
+
+    const profileSection = profile ? `\n\nPerfil de Luis:\n${profile}` : "";
+    const history = buildMessages(recentHistory.slice(0, -1));
+    const docMessage = { role: "user", content: `${caption}\n\n[Contenido de ${fileName}]:\n${extractedText}` };
+    const messages = [...history, docMessage];
+
+    const systemBlocks = [{ type: "text", text: GAIA_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }];
+    if (profileSection.trim()) systemBlocks.push({ type: "text", text: profileSection });
+
+    const response = await callClaude(systemBlocks, messages, 600);
+    let reply = response.content[0].text;
+    reply = await extractAndSaveMemory(reply, category);
+
+    const inputTokens = response.usage.input_tokens;
+    const outputTokens = response.usage.output_tokens;
+    const costo = ((inputTokens * 0.000003) + (outputTokens * 0.000015)).toFixed(5);
+    console.log(`[GAIA-DOC] ${fileName} | ${inputTokens}in/${outputTokens}out | $${costo}`);
+    registrarUso(inputTokens, outputTokens, costo);
+
+    await saveMessage("assistant", reply);
+    bot.sendMessage(chatId, reply);
+  } catch (err) {
+    console.error("Document error:", err);
+    bot.sendMessage(chatId, "No pude leer el archivo. Intenta de nuevo.");
+  }
+});
+
+// ── HANDLER DE FOTOS ──
+bot.on("photo", async (msg) => {
+  const chatId = msg.chat.id;
+  const messageId = msg.message_id;
+  const caption = msg.caption || "¿Qué ves en esta imagen?";
+  if (chatId !== LUIS_CHAT_ID) return;
+  if (processedMessages.has(messageId)) return;
+  processedMessages.add(messageId);
+  if (processedMessages.size > 100) processedMessages.delete(processedMessages.values().next().value);
+
+  try {
+    bot.sendChatAction(chatId, "typing");
+    await saveMessage("user", `[foto] ${caption}`);
 
     const photo = msg.photo[msg.photo.length - 1];
     const fileInfo = await bot.getFile(photo.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`;
-    const base64Image = await downloadPhoto(fileUrl);
+    const buffer = await downloadFile(fileUrl);
+    const base64Image = buffer.toString("base64");
 
-    // ── CAMBIO 4: Historial dinámico ──
     const historyLimit = getHistoryLimit(caption);
     const category = detectCategory(caption);
-    // ── PERFIL BAJO DEMANDA ──
-    const needsProfile = /recuerda|acuérdate|acuerdate|sabes que|te dije|te conté|te conte|mi perfil|mis datos/.test(caption.toLowerCase());
+    const needsProfile = /recuerda|sabes que|te dije|mis datos/.test(caption.toLowerCase());
     const [recentHistory, profile] = await Promise.all([
       getRecentMessages(historyLimit),
       needsProfile ? getProfile(category) : Promise.resolve("")
     ]);
 
-    // ── CAMBIO 3: Fecha solo si el caption la necesita ──
-    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia|semana|tarde|noche/.test(caption.toLowerCase());
+    const needsDate = /hoy|mañana|fecha|hora|cuándo|cuando|día|dia/.test(caption.toLowerCase());
     let fechaSection = "";
     if (needsDate) {
       const now = new Date();
-      const fechaActual = now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
-      fechaSection = `\n\nFecha y hora actual: ${fechaActual} (hora de Guadalajara)`;
+      fechaSection = `\n\nFecha y hora actual: ${now.toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })} (hora de Guadalajara)`;
     }
 
-    const profileSection = profile
-      ? `\n\nPerfil de Luis (contexto de fondo, no mencionar innecesariamente):\n${profile}`
-      : "";
-
+    const profileSection = profile ? `\n\nPerfil de Luis:\n${profile}` : "";
     const history = buildMessages(recentHistory.slice(0, -1));
-
     const imageMessage = {
       role: "user",
       content: [
         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64Image } },
-        { type: "text", text: caption },
-      ],
+        { type: "text", text: caption }
+      ]
     };
-
     const messages = [...history, imageMessage];
 
-    // ── CACHÉ: personalidad fija cacheada, perfil/fecha dinámicos sin caché ──
-    const systemBlocks = [
-      {
-        type: "text",
-        text: GAIA_SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" }
-      }
-    ];
+    const systemBlocks = [{ type: "text", text: GAIA_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }];
     const dynamicSection = profileSection + fechaSection;
-    if (dynamicSection.trim()) {
-      systemBlocks.push({ type: "text", text: dynamicSection });
-    }
+    if (dynamicSection.trim()) systemBlocks.push({ type: "text", text: dynamicSection });
 
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 400,
-      system: systemBlocks,
-      messages,
-    });
-
+    const response = await callClaude(systemBlocks, messages, 400);
     let reply = response.content[0].text;
     reply = await extractAndSaveMemory(reply, category);
 
@@ -429,4 +411,5 @@ bot.on("photo", async (msg) => {
     bot.sendMessage(chatId, "No pude procesar la foto. Intenta de nuevo.");
   }
 });
-// ── END PHOTO SUPPORT ──────────────────────────────────────────
+
+console.log("Gaia Telegram bot running...");
