@@ -281,7 +281,7 @@ bot.on("message", async (msg) => {
 
     // ── CAMBIO 4: Tokens dinámicos según longitud del mensaje ──
     const isShort = userText.length < 80 && !/explica|describe|escribe|redacta|lista|resume|analiza|ayúdame|ayudame/.test(userText.toLowerCase());
-    const maxTokens = isShort ? 150 : 400;
+    const maxTokens = isShort ? 300 : 400;
 
     // ── CACHÉ: personalidad fija cacheada, perfil/fecha dinámicos sin caché ──
     const systemBlocks = [
